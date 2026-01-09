@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的图库</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f2f5; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; }
+        
+        .card { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transition: transform 0.2s; display: flex; flex-direction: column; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        
+        /* 缩略图样式 */
+        .card-thumb {
+            width: 100%; height: 120px; background: #e8e8e8; margin-bottom: 10px; border-radius: 4px;
+            overflow: hidden; display: flex; align-items: center; justify-content: center; color: #999; font-size: 12px;
+        }
+        .card-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+        .card h3 { margin: 0 0 5px 0; font-size: 16px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .card p { font-size: 12px; color: #999; margin: 0 0 15px 0; }
+        
+        .actions { display: flex; gap: 8px; margin-top: auto; }
+        .btn { border: none; padding: 6px 0; border-radius: 4px; cursor: pointer; font-size: 12px; color: #fff; flex: 1; text-align: center;}
+        
+        .btn-view { background: #1890ff; }
+        .btn-edit { background: #faad14; } /* 橙色重命名按钮 */
+        .btn-del { background: #ff4d4f; }
+        .btn-copy { background: #13c2c2; } /* 青色复制按钮 */
+        .btn-create { background: #52c41a; padding: 10px 20px; font-size: 14px; flex: none; }
+        
+/* ... 之前的样式 ... */
+
+        /* ============ 拖拽视觉优化 ============ */
+        .card {
+            cursor: grab;
+            position: relative;
+            transition: transform 0.1s, border-color 0.1s; /* 增加一点过渡动画 */
+        }
+        .card:active {
+            cursor: grabbing;
+        }
+        
+        /* 正在被拖走的卡片：变半透明，加虚线框 */
+        .card.dragging {
+            opacity: 0.4;
+            border: 2px dashed #bbb;
+            background: #f9f9f9;
+            pointer-events: none; /* 关键：防止遮挡下方的目标判断 */
+        }
+
+        /* 目标卡片：提示插入到前面 (左侧蓝线) */
+        .card.drop-hint-before {
+            border-left: 4px solid #1890ff !important;
+            padding-left: 12px; /* 调整内边距防止内容跳动 */
+            background: #e6f7ff;
+        }
+
+        /* 目标卡片：提示插入到后面 (右侧蓝线) */
+        .card.drop-hint-after {
+            border-right: 4px solid #1890ff !important;
+            padding-right: 12px;
+            background: #e6f7ff;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>📂 我的关系图库</h2>
+        <button class="btn btn-create" onclick="createNew()">+ 新建关系图</button>
+    </div>
+
+    <div id="gallery" class="grid">
+        <p>正在加载...</p>
+    </div>
+
+<script>
+        let dragSrcEl = null;
+
+        // 加载列表
+        async function loadList() {
+            try {
+                const res = await fetch('api/api.php?action=get_list');
+                const json = await res.json();
+                if(json.status === 'success') {
+                    renderGrid(json.list);
+                }
+            } catch(e) { 
+                console.error(e);
+                // alert('加载列表失败'); // 首次加载失败可以不弹窗
+            }
+        }
+
+        // 渲染网格
+        function renderGrid(list) {
+            const container = document.getElementById('gallery');
+            
+            if(list.length === 0) {
+                container.innerHTML = '<p class="empty-tip">暂无项目，请点击右上角新建。</p>';
+                return;
+            }
+
+            container.innerHTML = list.map(item => {
+                const safeName = item.project_name.replace(/'/g, "\\'");
+                
+                let thumbHtml = '<div class="card-thumb">暂无预览</div>';
+                if (item.thumbnail) {
+                    thumbHtml = `<div class="card-thumb"><img src="${item.thumbnail}"></div>`;
+                }
+                
+                return `
+                <div class="card" draggable="true" data-id="${item.id}">
+                    ${thumbHtml}
+                    <h3 title="${item.project_name}">${item.project_name}</h3>
+                    <p>更新于: ${item.updated_at || '刚刚'}</p>
+                    <div class="actions">
+                        <button class="btn btn-view" onclick="location.href='editor.html?id=${item.id}'">进入</button>
+                        <button class="btn btn-copy" onclick="duplicateGraph(${item.id})">复制</button>
+                        <button class="btn btn-edit" onclick="renameGraph(${item.id}, '${safeName}')">改名</button>
+                        <button class="btn btn-del" onclick="deleteGraph(${item.id})">删除</button>
+                    </div>
+                </div>
+            `}).join('');
+
+            // 绑定拖拽事件
+            addDragEvents();
+        }
+
+        // === 复制功能 ===
+        async function duplicateGraph(id) {
+            if(!confirm("确定要复制这份图表吗？")) return;
+            try {
+                const res = await fetch('api/api.php?action=duplicate_graph', { method: 'POST', body: JSON.stringify({ id: id }) });
+                const json = await res.json();
+                if(json.status === 'success') loadList(); else alert('复制失败: ' + json.message);
+            } catch(e) { alert('网络错误'); }
+        }
+
+        // ============ 拖拽排序核心逻辑 (优化版) ============
+        function addDragEvents() {
+            const cards = document.querySelectorAll('.card');
+            cards.forEach(card => {
+                card.addEventListener('dragstart', handleDragStart);
+                card.addEventListener('dragover', handleDragOver);
+                card.addEventListener('dragleave', handleDragLeave); // [新增] 离开处理
+                card.addEventListener('drop', handleDrop);
+                card.addEventListener('dragend', handleDragEnd);
+            });
+        }
+
+        function handleDragStart(e) {
+            // 防止拖动按钮
+            if(e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+                e.preventDefault();
+                return;
+            }
+            dragSrcEl = this;
+            e.dataTransfer.effectAllowed = 'move';
+            // 延时添加样式，视觉更佳
+            setTimeout(() => this.classList.add('dragging'), 0);
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) e.preventDefault(); // 允许放置
+            e.dataTransfer.dropEffect = 'move';
+
+            // 如果是自己，或者不是卡片元素，不处理
+            if (this === dragSrcEl || !this.classList.contains('card')) return;
+
+            // === 核心：计算鼠标在目标卡片的左半边还是右半边 ===
+            const rect = this.getBoundingClientRect();
+            const horizontalCenter = rect.left + rect.width / 2;
+
+            // 先移除所有可能的提示
+            this.classList.remove('drop-hint-before', 'drop-hint-after');
+
+            if (e.clientX < horizontalCenter) {
+                // 鼠标在中心点左侧 -> 提示插到前面
+                this.classList.add('drop-hint-before');
+            } else {
+                // 鼠标在中心点右侧 -> 提示插到后面
+                this.classList.add('drop-hint-after');
+            }
+            return false;
+        }
+
+        // [新增] 鼠标离开卡片时清除提示
+        function handleDragLeave(e) {
+            this.classList.remove('drop-hint-before', 'drop-hint-after');
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) e.stopPropagation();
+
+            // 清除目标卡片的提示样式
+            this.classList.remove('drop-hint-before', 'drop-hint-after');
+
+            if (dragSrcEl !== this && this.classList.contains('card')) {
+                // 根据刚才 DragOver留下的标记决定位置
+                const rect = this.getBoundingClientRect();
+                const horizontalCenter = rect.left + rect.width / 2;
+
+                // 再次判断（比依赖 class 更稳定）
+                if (e.clientX < horizontalCenter) {
+                    // 插到前面
+                    this.before(dragSrcEl);
+                } else {
+                    // 插到后面
+                    this.after(dragSrcEl);
+                }
+                // 保存新顺序
+                saveOrder();
+            }
+            return false;
+        }
+
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            // 双重保险：清理所有可能残留的提示样式
+            document.querySelectorAll('.card').forEach(c => {
+                c.classList.remove('drop-hint-before', 'drop-hint-after');
+            });
+            dragSrcEl = null;
+        }
+
+        // 保存顺序到服务器
+        async function saveOrder() {
+            const container = document.getElementById('gallery');
+            // 按当前 DOM 顺序获取所有 ID
+            const cards = container.querySelectorAll('.card');
+            const ids = Array.from(cards).map(c => c.getAttribute('data-id'));
+            
+            if(ids.length < 2) return; // 只有一个不用保存
+
+            try {
+                // 发送后台保存，不需要等待结果或刷新页面，体验更流畅
+                fetch('api/api.php?action=reorder_graphs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: ids })
+                });
+            } catch(e) {
+                console.error("排序保存失败", e);
+            }
+        }
+
+        // === 基础功能 ===
+        async function createNew() {
+            const name = prompt("请输入新项目名称", "新项目");
+            if(!name || !name.trim()) return;
+            try {
+                const res = await fetch('api/api.php?action=create_graph', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+                const json = await res.json();
+                if(json.status === 'success') location.href = `editor.html?id=${json.id}`; else alert(json.message);
+            } catch(e) { alert('创建失败'); }
+        }
+
+        async function renameGraph(id, oldName) {
+            const newName = prompt("请输入新的项目名称：", oldName);
+            if (newName === null || newName.trim() === "" || newName === oldName) return;
+            await fetch('api/api.php?action=rename_graph', { method: 'POST', body: JSON.stringify({ id: id, name: newName.trim() }) });
+            loadList();
+        }
+
+        async function deleteGraph(id) {
+            if(!confirm("确定删除该项目？此操作无法撤销！")) return;
+            await fetch('api/api.php?action=delete_graph', { method: 'POST', body: JSON.stringify({ id: id }) });
+            loadList(); 
+        }
+
+        // 初始化
+        loadList(); 
+    </script>
+</body>
+</html>
