@@ -1,5 +1,10 @@
 # G6_Charactor_Node
 人物关系数据图，使用了G6，需要配置mysql
+
+# 效果预览
+![alt text](image.png) ![alt text](image-1.png) ![alt text](image-2.png)
+
+
 # 使用方式：
 
 1、修改服务器文件
